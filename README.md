@@ -1,6 +1,5 @@
 # DogStatsD PHP Custom Metrics Sandbox
 
-**GitHub Repository:** [ddalexvea/datadog-agent-dogstatsd-php-udp-uds](https://github.com/ddalexvea/datadog-agent-dogstatsd-php-udp-uds)
 
 ## 📋 Overview
 
