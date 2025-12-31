@@ -10,8 +10,6 @@ This sandbox demonstrates how to send custom metrics from a PHP application to t
 - Automatic log collection by Agent
 - Continuous metric sending every 10 seconds
 
----
-
 ## 📊 Sample Rate Explanation
 
 The `sampleRate` parameter controls what percentage of metrics are sent:
@@ -246,47 +244,15 @@ kubectl logs -f php-dogstatsd-test
 kubectl exec <agent-pod> -n datadog -c agent -- agent status | grep "Udp Packets"
 ```
 
----
+### 📸 Expected Results in Datadog
 
-## 📊 How `useHostPort: true` Works
+**Custom Metrics:**
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         KUBERNETES NODE                             │
-│                      (IP: 192.168.49.2)                             │
-│                                                                     │
-│    useHostPort: true                                                │
-│    Opens port 8125 on the NODE itself                               │
-│                                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │                                                             │    │
-│  │   NODE:8125  ◀──────────────────────────────────────────┐   │    │
-│  │      │                                                  │   │    │
-│  │      ▼                                                  │   │    │
-│  │  ┌────────────────────┐      ┌────────────────────┐     │   │    │
-│  │  │  Datadog Agent Pod │      │    PHP App Pod     │     │   │    │
-│  │  │                    │      │                    │     │   │    │
-│  │  │  Container:8125 ◀──┘      │  sends to:         │     │   │    │ 
-│  │  │  (DogStatsD)       │      │  NODE_IP:8125  ────┘     │   │    │
-│  │  │                    │      │                    │     │   │    │
-│  │  └────────────────────┘      └────────────────────┘     │   │    │
-│  │                                                         │   │    │
-│  └─────────────────────────────────────────────────────────┘   │    │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
+![Custom Metrics](https://raw.githubusercontent.com/ddalexvea/datadog-agent-dogstatsd-php-udp-uds/main/datadog-ui-custom-metrics.png)
 
-**PHP app needs `DD_AGENT_HOST` to know the NODE's IP:**
+**PHP App Logs:**
 
-```yaml
-env:
-  - name: DD_AGENT_HOST
-    valueFrom:
-      fieldRef:
-        fieldPath: status.hostIP
-  - name: DD_DOGSTATSD_PORT
-    value: "8125"
-```
+![PHP Logs](https://raw.githubusercontent.com/ddalexvea/datadog-agent-dogstatsd-php-udp-uds/main/datadog-ui-php-statsd-logs.png)
 
 ---
 
