@@ -1,5 +1,7 @@
 # DogStatsD PHP Custom Metrics Sandbox
 
+**GitHub Repository:** [ddalexvea/datadog-agent-dogstatsd-php-udp-uds](https://github.com/ddalexvea/datadog-agent-dogstatsd-php-udp-uds)
+
 ## 📋 Overview
 
 This sandbox demonstrates how to send custom metrics from a PHP application to the Datadog Agent via DogStatsD (UDP) in Kubernetes.
@@ -248,11 +250,11 @@ kubectl exec <agent-pod> -n datadog -c agent -- agent status | grep "Udp Packets
 
 **Custom Metrics:**
 
-![Custom Metrics](https://raw.githubusercontent.com/ddalexvea/datadog-agent-dogstatsd-php-udp-uds/main/datadog-ui-custom-metrics.png)
+![Custom Metrics](datadog-ui-custom-metrics.png)
 
 **PHP App Logs:**
 
-![PHP Logs](https://raw.githubusercontent.com/ddalexvea/datadog-agent-dogstatsd-php-udp-uds/main/datadog-ui-php-statsd-logs.png)
+![PHP Logs](datadog-ui-php-statsd-logs.png)
 
 ---
 
