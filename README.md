@@ -43,6 +43,22 @@ protected function logCounter($_name, $_value = 1, $_tags = [], $_sample_rate = 
 
 **The PHP code is correct.** The issue is likely infrastructure or configuration related.
 
+### 📊 Sample Rate Explanation
+
+The `$_sample_rate` parameter controls what percentage of metrics are sent:
+
+| Sample Rate | Meaning | Result |
+|-------------|---------|--------|
+| `1` (default) | No sampling | **100% of metrics sent** |
+| `0.5` | 50% sampling | 50% of metrics sent |
+| `0.1` | 90% sampling | 10% of metrics sent |
+| `0` | Everything sampled | **0% of metrics sent** |
+
+> **Note:** Sample rate `0` means everything is sampled (dropped), so nothing is sent.
+> Sample rate `1` means no sampling, so everything is sent.
+
+The customer's default `$_sample_rate = 1` is correct - all metrics should be sent.
+
 ---
 
 ## 📋 What We Know vs Don't Know
@@ -206,10 +222,50 @@ kubectl create secret generic datadog-secret \
   --from-literal=api-key="<YOUR_API_KEY>" \
   -n datadog
 
+# Create values.yaml
+cat <<'EOF' > /tmp/values.yaml
+# Datadog Agent Helm values.yaml for DogStatsD testing
+datadog:
+  apiKeyExistingSecret: "datadog-secret"
+  site: "datadoghq.com"
+  
+  # DogStatsD Configuration (CRITICAL)
+  dogstatsd:
+    useHostPort: true
+    hostPort: 8125
+    nonLocalTraffic: true      # CRITICAL: Allow traffic from other pods
+    originDetection: true
+    tagCardinality: "orchestrator"
+
+  # Logs collection
+  logs:
+    enabled: true
+    containerCollectAll: true
+
+  # APM (optional)
+  apm:
+    portEnabled: true
+    port: 8126
+
+  # Tags
+  tags:
+    - "env:sandbox"
+    - "sandbox:missing-custom-metrics"
+
+agents:
+  enabled: true
+  tolerations:
+    - operator: Exists
+
+clusterAgent:
+  enabled: true
+  replicas: 1
+EOF
+
 # Install Agent
 helm repo add datadog https://helm.datadoghq.com
 helm install datadog-agent datadog/datadog \
-  -f values.yaml \
+  -f /tmp/values.yaml \
   -n datadog
 ```
 
@@ -224,22 +280,185 @@ kubectl get pod <agent-pod> -n datadog -o jsonpath='{.spec.containers[0].ports}'
 kubectl get pod <agent-pod> -n datadog -o jsonpath='{.spec.containers[0].env}' | jq '.[] | select(.name | contains("STATSD"))'
 ```
 
-### Test UDP from a Pod
+---
+
+## 🐘 PHP DogStatsD Test (Kubernetes)
+
+### Step 1: Create PHP Code ConfigMap
 
 ```bash
-# Create test pod
-kubectl run test-pod --image=alpine --restart=Never -- sleep 3600
+cat <<'EOF' | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: php-dogstatsd-code
+  namespace: default
+data:
+  test.php: |
+    <?php
+    /**
+     * DogStatsD PHP UDP Test - Sends metrics every 10 seconds (runs forever)
+     */
+    
+    class DogStatsd {
+        private $host;
+        private $port;
+        
+        public function __construct(string $host, int $port) {
+            $this->host = $host;
+            $this->port = $port;
+            $this->log("INFO", "Creating DogStatsD client", ['host' => $host, 'port' => $port]);
+        }
+        
+        public function increment(string $metric, int $value = 1, array $tags = []): void {
+            $tagStr = $this->formatTags($tags);
+            $message = "{$metric}:{$value}|c{$tagStr}";
+            
+            $this->log("INFO", "Sending metric", [
+                'metric' => $metric,
+                'value' => $value,
+                'udp_message' => $message,
+            ]);
+            
+            $this->sendUdp($message);
+        }
+        
+        private function formatTags(array $tags): string {
+            if (empty($tags)) return '';
+            $tagPairs = [];
+            foreach ($tags as $key => $value) {
+                $tagPairs[] = "{$key}:{$value}";
+            }
+            return '|#' . implode(',', $tagPairs);
+        }
+        
+        private function sendUdp(string $message): void {
+            $fp = @fsockopen("udp://{$this->host}", $this->port, $errno, $errstr, 1);
+            if (!$fp) {
+                $this->log("ERROR", "UDP socket failed", ['target' => "{$this->host}:{$this->port}"]);
+                return;
+            }
+            $bytes = fwrite($fp, $message);
+            fclose($fp);
+            $this->log("INFO", "UDP sent", ['bytes' => $bytes, 'to' => "{$this->host}:{$this->port}"]);
+        }
+        
+        private function log(string $level, string $message, array $context = []): void {
+            $log = ['timestamp' => date('c'), 'level' => $level, 'message' => $message, 'service' => 'php-app'];
+            if (!empty($context)) $log = array_merge($log, $context);
+            echo json_encode($log) . "\n";
+        }
+    }
+    
+    // Configuration
+    $host = getenv('DD_AGENT_HOST') ?: 'localhost';
+    $port = (int)(getenv('DD_DOGSTATSD_PORT') ?: 8125);
+    $interval = 10; // seconds between metrics
+    
+    echo "==========================================\n";
+    echo "  DogStatsD PHP - Continuous Metrics\n";
+    echo "==========================================\n";
+    echo "Target: {$host}:{$port}\n";
+    echo "Interval: {$interval}s\n";
+    echo "==========================================\n\n";
+    
+    $statsd = new DogStatsd($host, $port);
+    $counter = 0;
+    
+    // Send metrics forever (every 10 seconds)
+    while (true) {
+        $counter++;
+        $statsd->increment('php.sandbox.requests', 1, ['env' => 'sandbox']);
+        $statsd->increment('php.sandbox.items', rand(1, 10), ['env' => 'sandbox']);
+        echo "--- Iteration {$counter} complete, sleeping {$interval}s ---\n\n";
+        sleep($interval);
+    }
+EOF
+```
 
-# Send test metric
-kubectl exec test-pod -- sh -c '
-  apk add --no-cache netcat-openbsd
-  DD_HOST=$(ip route | grep default | awk "{print \$3}")
-  echo "test.metric:1|c|#env:sandbox" | nc -u -w1 $DD_HOST 8125
-'
+### Step 2: Create PHP Pod with DD_AGENT_HOST
 
-# Verify Agent received it
+```bash
+cat <<'EOF' | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: php-dogstatsd-test
+  namespace: default
+  labels:
+    app: php-dogstatsd-test
+    # Labels for Datadog tagging
+    tags.datadoghq.com/service: "php-app"
+    tags.datadoghq.com/env: "sandbox"
+  annotations:
+    # Autodiscovery annotations for log collection
+    ad.datadoghq.com/php.logs: '[{"source": "php", "service": "php-app"}]'
+spec:
+  containers:
+  - name: php
+    image: php:8.2-cli
+    # Runs continuously - sends metrics every 10 seconds
+    command: ["php", "/app/test.php"]
+    env:
+    - name: DD_AGENT_HOST
+      valueFrom:
+        fieldRef:
+          fieldPath: status.hostIP
+    - name: DD_DOGSTATSD_PORT
+      value: "8125"
+    volumeMounts:
+    - name: php-code
+      mountPath: /app
+  volumes:
+  - name: php-code
+    configMap:
+      name: php-dogstatsd-code
+EOF
+
+kubectl wait --for=condition=Ready pod/php-dogstatsd-test --timeout=60s
+```
+
+### Step 3: View Metrics Being Sent (Logs)
+
+```bash
+# Watch the PHP app sending metrics (runs continuously every 10s)
+kubectl logs -f php-dogstatsd-test
+```
+
+### Expected Output (Continuous)
+
+```
+==========================================
+  DogStatsD PHP - Continuous Metrics
+==========================================
+Target: 192.168.49.2:8125
+Interval: 10s
+==========================================
+
+{"timestamp":"2025-12-31T13:03:16+00:00","level":"INFO","message":"Creating DogStatsD client","service":"php-app","host":"192.168.49.2","port":8125}
+{"timestamp":"2025-12-31T13:03:16+00:00","level":"INFO","message":"Sending metric","service":"php-app","metric":"php.sandbox.requests","value":1,"udp_message":"php.sandbox.requests:1|c|#env:sandbox"}
+{"timestamp":"2025-12-31T13:03:16+00:00","level":"INFO","message":"UDP sent","service":"php-app","bytes":42,"to":"192.168.49.2:8125"}
+--- Iteration 1 complete, sleeping 10s ---
+
+{"timestamp":"2025-12-31T13:03:26+00:00","level":"INFO","message":"Sending metric","service":"php-app","metric":"php.sandbox.requests","value":1,"udp_message":"php.sandbox.requests:1|c|#env:sandbox"}
+...
+```
+
+### Step 4: Verify Agent Received Metrics
+
+```bash
+# Check UDP packets count (should increase every 10s)
 kubectl exec <agent-pod> -n datadog -c agent -- agent status | grep "Udp Packets"
 ```
+
+### Key Points Demonstrated
+
+| Aspect | Value |
+|--------|-------|
+| `DD_AGENT_HOST` | Set via `status.hostIP` → Gets node IP |
+| `DD_DOGSTATSD_PORT` | `8125` |
+| UDP Target | `192.168.49.2:8125` (node IP + hostPort) |
+| Logs | JSON to stdout (collected by Agent) |
 
 ---
 
