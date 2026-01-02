@@ -335,5 +335,3 @@ $statsd = new DogStatsd([
 - [Unix Domain Socket Setup](https://docs.datadoghq.com/developers/dogstatsd/unix_socket/)
 
 ---
-
-*Last updated: December 2024*
